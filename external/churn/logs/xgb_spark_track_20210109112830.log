@@ -1,0 +1,499 @@
+Spark context Web UI available at http://f65218c1dddf:4040
+Spark context available as 'sc' (master = spark://172.27.1.10:7077, app id = app-20210109112838-0008).
+Spark session available as 'spark'.
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /___/ .__/\_,_/_/ /_/\_\   version 2.4.5
+      /_/
+         
+Using Scala version 2.11.12 (OpenJDK 64-Bit Server VM, Java 1.8.0_242)
+Type in expressions to have them evaluated.
+Type :help for more information.
+
+scala> import ml.dmlc.xgboost4j.scala.spark.{TrackerConf, XGBoostClassifier, XGBoostClassificationModel}
+import ml.dmlc.xgboost4j.scala.spark.{TrackerConf, XGBoostClassifier, XGBoostClassificationModel}
+
+scala> import org.apache.spark.ml.evaluation.BinaryClassificationEvaluator
+import org.apache.spark.ml.evaluation.BinaryClassificationEvaluator
+
+scala> import org.apache.spark.ml.feature.VectorAssembler
+import org.apache.spark.ml.feature.VectorAssembler
+
+scala> import org.apache.spark.ml.Pipeline
+import org.apache.spark.ml.Pipeline
+
+scala> import org.apache.spark.sql._
+import org.apache.spark.sql._
+
+scala> import org.apache.spark.sql.types._
+import org.apache.spark.sql.types._
+
+scala> import org.apache.spark.sql.functions._
+import org.apache.spark.sql.functions._
+
+scala> spark.sparkContext.setLogLevel("FATAL")
+
+scala> 
+
+scala> // LOAD DATA
+
+scala> val save_path_train = s"../../external/churn/data/train/*"
+save_path_train: String = ../../external/churn/data/train/*
+
+scala> val save_path_valid = s"../../external/churn/data/valid/*"
+save_path_valid: String = ../../external/churn/data/valid/*
+
+scala> val df_train = spark.read.parquet(save_path_train)
+df_train: org.apache.spark.sql.DataFrame = [current_date: date, useID1: int ... 141 more fields]
+
+scala> val df_valid = spark.read.parquet(save_path_valid)
+df_valid: org.apache.spark.sql.DataFrame = [current_date: date, useID1: int ... 141 more fields]
+
+scala> 
+
+scala> def getStats(Data: DataFrame, Target: String) = {
+     |     val nrows = Data.count
+     |     val ncols = Data.columns.length
+     |     val props = Data.select(Target).groupBy().agg(avg(col(Target))).take(1)(0).get(0).toString.toFloat
+     | Array(nrows, ncols, props)}
+getStats: (Data: org.apache.spark.sql.DataFrame, Target: String)Array[Float]
+
+scala> 
+
+scala> val Target = "target_userIgnr"
+Target: String = target_userIgnr
+
+scala> 
+
+scala> val Train = df_train.where($"useID2".isNotNull && $"ratio_befor" < lit(1.0) && col(Target).isNotNull).na.fill(0)
+Train: org.apache.spark.sql.DataFrame = [current_date: date, useID1: int ... 141 more fields]
+
+scala> val Valid = df_valid.where($"useID2".isNotNull && $"ratio_befor" < lit(1.0) && col(Target).isNotNull).na.fill(0)
+Valid: org.apache.spark.sql.DataFrame = [current_date: date, useID1: int ... 141 more fields]
+
+scala> 
+
+scala> // Train.printSchema
+
+scala> // Valid.printSchema
+
+scala> 
+
+scala> // GET STATS
+
+scala> val statTrain = getStats(Train, Target)
+statTrain: Array[Float] = Array(911370.0, 143.0, 0.046167858)
+
+scala> val statValid = getStats(Valid, Target)
+statValid: Array[Float] = Array(448547.0, 143.0, 0.050139673)
+
+scala> Train.groupBy("current_date").agg(count($"useID1"), avg(col(Target))).orderBy("current_date").show
++------------+-------------+--------------------+
+|current_date|count(useID1)|avg(target_userIgnr)|
++------------+-------------+--------------------+
+|  2018-02-13|        51782|0.046579892626781506|
+|  2018-02-14|        55282| 0.04773705726999747|
+|  2018-02-15|        55800|0.047724014336917565|
+|  2018-02-16|        55991| 0.04788269543319462|
+|  2018-02-17|        55644| 0.04571921500970455|
+|  2018-02-18|        55700|0.045529622980251344|
+|  2018-02-19|        55850|0.044512085944494184|
+|  2018-02-20|        55900| 0.04477638640429338|
+|  2018-02-21|        55865|0.044643336615054145|
+|  2018-02-22|        55668| 0.04480132212402098|
+|  2018-02-23|        56010| 0.04443849312622746|
+|  2018-02-24|        56502| 0.04406923648720399|
+|  2018-02-25|        61076| 0.04636845896915319|
+|  2018-02-26|        61292|0.046694511518632124|
+|  2018-02-27|        61442| 0.04786628039451841|
+|  2018-02-28|        61566| 0.04889062144690251|
++------------+-------------+--------------------+
+
+
+scala> Valid.groupBy("current_date").agg(count($"useID1"), avg(col(Target))).orderBy("current_date").show
++------------+-------------+--------------------+
+|current_date|count(useID1)|avg(target_userIgnr)|
++------------+-------------+--------------------+
+|  2018-03-01|        61486| 0.04927951078294246|
+|  2018-03-02|        61511|0.048137731462665215|
+|  2018-03-03|        64081| 0.05015527223357938|
+|  2018-03-04|        65169|  0.0509291227424082|
+|  2018-03-05|        65694|0.051024446677017686|
+|  2018-03-06|        65533| 0.05089039110066684|
+|  2018-03-07|        65073|0.050389562491355865|
++------------+-------------+--------------------+
+
+
+scala> 
+
+scala> // SET PIPELINE PARAMS
+
+scala> val exclude_name = "current_date,useID1,closest_auditDate,interval_befor,useID2,ratio_after,sum_showCont_after,sum_igndCont_after,interval_after,userId,useID,target_userLost".split(",") ++ Array(Target)
+exclude_name: Array[String] = Array(current_date, useID1, closest_auditDate, interval_befor, useID2, ratio_after, sum_showCont_after, sum_igndCont_after, interval_after, userId, useID, target_userLost, target_userIgnr)
+
+scala> val exclude_type = Array(StringType, TimestampType, DateType)
+exclude_type: Array[org.apache.spark.sql.types.AtomicType with Product with Serializable] = Array(StringType, TimestampType, DateType)
+
+scala> val main_cols = Train.schema.fields.filterNot(f => exclude_type contains f.dataType).filterNot(f => exclude_name contains f.name).map(x => x.name)
+main_cols: Array[String] = Array(days_passed, sum_showCont_befor, sum_igndCont_befor, ratio_befor, user_create_date, user_birth_date, user_gender, user_is_active, user_is_deleted, user_is_abused, user_is_activated, avg_metadata_numCompanions, avg_metadata_numPhotos, avg_metadata_numPolls, avg_metadata_numSymbols, avg_metadata_numTokens, avg_metadata_numVideos, avg_metadata_totalVideoLength, avg_userOwnerCounters_USER_FEED_REMOVE, avg_userOwnerCounters_USER_PROFILE_VIEW, avg_userOwnerCounters_VOTE_POLL, avg_userOwnerCounters_USER_SEND_MESSAGE, avg_userOwnerCounters_USER_DELETE_MESSAGE, avg_userOwnerCounters_USER_INTERNAL_LIKE, avg_userOwnerCounters_USER_INTERNAL_UNLIKE, avg_userOwnerCounters_USER_STATUS_COMMENT_CREATE, avg_userOwnerCounters_PHOTO_COMMENT_CREATE, avg_userOwnerCounters_MOV...
+scala> println("MAIN_COLS_ARRAY_SIZE: " + main_cols.length)
+MAIN_COLS_ARRAY_SIZE: 130
+
+scala> 
+
+scala> val pos_wei = (1-statTrain(2))/statTrain(2)
+pos_wei: Float = 20.660091
+
+scala> val parallelizm = 4
+parallelizm: Int = 4
+
+scala> val xgbParam: Map[String, Any] = Map(
+     |     "missing" -> 0,
+     |     "objective" -> "binary:logistic",
+     |     "eval_metric" ->  "logloss",
+     |     "eta" -> 0.01,
+     |     "max_depth" -> 3,
+     |     "num_round" -> 200,
+     |     "subsample" -> 0.7,
+     |     "min_child_weight" -> 100,
+     |     "scale_pos_weight" -> pos_wei.toInt,
+     |     "num_workers" -> parallelizm,
+     |     "verbosity" -> 1,
+     |     "tracker_conf" -> TrackerConf(60*60*1000, "scala"),
+     |     "kill_spark_context_on_worker_failure" -> false
+     | )
+xgbParam: Map[String,Any] = Map(min_child_weight -> 100, scale_pos_weight -> 20, num_workers -> 4, subsample -> 0.7, max_depth -> 3, kill_spark_context_on_worker_failure -> false, objective -> binary:logistic, eval_metric -> logloss, num_round -> 200, missing -> 0, tracker_conf -> TrackerConf(3600000,scala), eta -> 0.01, verbosity -> 1)
+
+scala> 
+
+scala> 
+
+scala> // TRAIN MODEL PIPELINE
+
+scala> val vectorAssembler = new VectorAssembler().setInputCols(main_cols).setOutputCol("features")
+vectorAssembler: org.apache.spark.ml.feature.VectorAssembler = vecAssembler_0b68651d9d01
+
+scala> val xgbClassifier = new XGBoostClassifier(xgbParam).setFeaturesCol("features").setLabelCol(Target)
+xgbClassifier: ml.dmlc.xgboost4j.scala.spark.XGBoostClassifier = xgbc_57b7862465e2
+
+scala> val pipeModel = new Pipeline().setStages(Array(vectorAssembler, xgbClassifier))
+pipeModel: org.apache.spark.ml.Pipeline = pipeline_16d0427f7656
+
+scala> 
+
+scala> val xgbPipelineModel = pipeModel.fit(Train)
+[INFO] [01/09/2021 11:29:28.503] [RabitTracker-akka.actor.default-dispatcher-3] [akka://RabitTracker/user/Handler] Tracker listening @ 172.27.1.10:60737
+[INFO] [01/09/2021 11:29:28.503] [RabitTracker-akka.actor.default-dispatcher-3] [akka://RabitTracker/user/Handler] Worker connection timeout is 1 hour.
+[INFO] [01/09/2021 11:29:54.189] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] Received start signal from spark-worker.infra_net_pet [rank: 0]
+[INFO] [01/09/2021 11:29:54.218] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] Worker 172.27.1.11 (rank: 0) has started.
+[INFO] [01/09/2021 11:29:54.241] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] Received start signal from spark-worker.infra_net_pet [rank: 1]
+[INFO] [01/09/2021 11:29:54.248] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] Worker 172.27.1.11 (rank: 1) has started.
+[INFO] [01/09/2021 11:29:54.307] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] Received start signal from spark-worker.infra_net_pet [rank: 2]
+[INFO] [01/09/2021 11:29:54.308] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] Worker 172.27.1.11 (rank: 2) has started.
+[INFO] [01/09/2021 11:29:54.330] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] Received start signal from spark-worker.infra_net_pet [rank: 3]
+[INFO] [01/09/2021 11:29:54.334] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] Worker 172.27.1.11 (rank: 3) has started.
+[INFO] [01/09/2021 11:29:54.376] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] All workers have started.
+[INFO] [01/09/2021 11:29:56.675] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [0]	train-logloss:0.691398
+[INFO] [01/09/2021 11:29:58.040] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [1]	train-logloss:0.688740
+[INFO] [01/09/2021 11:29:58.043] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/system/IO-TCP/selectors/$a/6] Message [akka.io.SelectionHandler$ChannelReadable$] from Actor[akka://RabitTracker/deadLetters] to Actor[akka://RabitTracker/system/IO-TCP/selectors/$a/6#-1536461445] was not delivered. [1] dead letters encountered. This logging can be turned off or adjusted with configuration settings 'akka.log-dead-letters' and 'akka.log-dead-letters-during-shutdown'.
+[INFO] [01/09/2021 11:29:59.511] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [2]	train-logloss:0.688430
+[INFO] [01/09/2021 11:30:01.005] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [3]	train-logloss:0.685988
+[INFO] [01/09/2021 11:30:02.392] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [4]	train-logloss:0.683647
+[INFO] [01/09/2021 11:30:04.005] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [5]	train-logloss:0.682688
+[INFO] [01/09/2021 11:30:05.390] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [6]	train-logloss:0.680835
+[INFO] [01/09/2021 11:30:06.844] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [7]	train-logloss:0.679217
+[INFO] [01/09/2021 11:30:08.257] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [8]	train-logloss:0.677504
+[INFO] [01/09/2021 11:30:09.604] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [9]	train-logloss:0.675828
+[INFO] [01/09/2021 11:30:11.074] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [10]	train-logloss:0.673747
+[INFO] [01/09/2021 11:30:12.511] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [11]	train-logloss:0.673085
+[INFO] [01/09/2021 11:30:14.014] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [12]	train-logloss:0.671661
+[INFO] [01/09/2021 11:30:15.640] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [13]	train-logloss:0.670033
+[INFO] [01/09/2021 11:30:17.045] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [14]	train-logloss:0.668687
+[INFO] [01/09/2021 11:30:18.442] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [15]	train-logloss:0.667199
+[INFO] [01/09/2021 11:30:19.836] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [16]	train-logloss:0.665210
+[INFO] [01/09/2021 11:30:21.221] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [17]	train-logloss:0.664675
+[INFO] [01/09/2021 11:30:22.676] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [18]	train-logloss:0.662587
+[INFO] [01/09/2021 11:30:24.049] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [19]	train-logloss:0.662267
+[INFO] [01/09/2021 11:30:25.499] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [20]	train-logloss:0.660956
+[INFO] [01/09/2021 11:30:26.949] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [21]	train-logloss:0.659749
+[INFO] [01/09/2021 11:30:28.291] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [22]	train-logloss:0.658020
+[INFO] [01/09/2021 11:30:29.691] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [23]	train-logloss:0.657131
+[INFO] [01/09/2021 11:30:31.087] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [24]	train-logloss:0.655681
+[INFO] [01/09/2021 11:30:32.503] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [25]	train-logloss:0.654961
+[INFO] [01/09/2021 11:30:33.978] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [26]	train-logloss:0.653758
+[INFO] [01/09/2021 11:30:35.430] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [27]	train-logloss:0.652662
+[INFO] [01/09/2021 11:30:36.711] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [28]	train-logloss:0.651399
+[INFO] [01/09/2021 11:30:38.176] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [29]	train-logloss:0.649910
+[INFO] [01/09/2021 11:30:39.574] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [30]	train-logloss:0.648738
+[INFO] [01/09/2021 11:30:41.000] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [31]	train-logloss:0.648285
+[INFO] [01/09/2021 11:30:42.524] [RabitTracker-akka.actor.default-dispatcher-15] [akka://RabitTracker/user/Handler] [32]	train-logloss:0.647396
+[INFO] [01/09/2021 11:30:43.913] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [33]	train-logloss:0.646390
+[INFO] [01/09/2021 11:30:45.259] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [34]	train-logloss:0.645697
+[INFO] [01/09/2021 11:30:46.803] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [35]	train-logloss:0.644115
+[INFO] [01/09/2021 11:30:48.204] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [36]	train-logloss:0.643197
+[INFO] [01/09/2021 11:30:49.531] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [37]	train-logloss:0.642349
+[INFO] [01/09/2021 11:30:51.019] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [38]	train-logloss:0.641510
+[INFO] [01/09/2021 11:30:52.526] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [39]	train-logloss:0.640692
+[INFO] [01/09/2021 11:30:53.958] [RabitTracker-akka.actor.default-dispatcher-10] [akka://RabitTracker/user/Handler] [40]	train-logloss:0.639867
+[INFO] [01/09/2021 11:30:55.308] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [41]	train-logloss:0.638748
+[INFO] [01/09/2021 11:30:56.721] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [42]	train-logloss:0.637997
+[INFO] [01/09/2021 11:30:58.120] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [43]	train-logloss:0.636978
+[INFO] [01/09/2021 11:30:59.549] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [44]	train-logloss:0.636826
+[INFO] [01/09/2021 11:31:00.990] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [45]	train-logloss:0.635278
+[INFO] [01/09/2021 11:31:02.398] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [46]	train-logloss:0.634293
+[INFO] [01/09/2021 11:31:03.876] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [47]	train-logloss:0.633774
+[INFO] [01/09/2021 11:31:05.328] [RabitTracker-akka.actor.default-dispatcher-10] [akka://RabitTracker/user/Handler] [48]	train-logloss:0.632874
+[INFO] [01/09/2021 11:31:06.661] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [49]	train-logloss:0.632467
+[INFO] [01/09/2021 11:31:08.116] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [50]	train-logloss:0.631399
+[INFO] [01/09/2021 11:31:09.431] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [51]	train-logloss:0.631226
+[INFO] [01/09/2021 11:31:10.782] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [52]	train-logloss:0.629852
+[INFO] [01/09/2021 11:31:12.178] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [53]	train-logloss:0.628935
+[INFO] [01/09/2021 11:31:13.528] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [54]	train-logloss:0.628543
+[INFO] [01/09/2021 11:31:14.863] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [55]	train-logloss:0.627697
+[INFO] [01/09/2021 11:31:16.197] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [56]	train-logloss:0.627032
+[INFO] [01/09/2021 11:31:17.619] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [57]	train-logloss:0.626156
+[INFO] [01/09/2021 11:31:19.283] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [58]	train-logloss:0.626340
+[INFO] [01/09/2021 11:31:20.654] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [59]	train-logloss:0.625367
+[INFO] [01/09/2021 11:31:22.103] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [60]	train-logloss:0.624823
+[INFO] [01/09/2021 11:31:23.434] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [61]	train-logloss:0.623654
+[INFO] [01/09/2021 11:31:24.781] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [62]	train-logloss:0.623381
+[INFO] [01/09/2021 11:31:26.185] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [63]	train-logloss:0.623275
+[INFO] [01/09/2021 11:31:27.526] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [64]	train-logloss:0.622558
+[INFO] [01/09/2021 11:31:28.821] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [65]	train-logloss:0.621874
+[INFO] [01/09/2021 11:31:30.214] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [66]	train-logloss:0.620935
+[INFO] [01/09/2021 11:31:31.750] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [67]	train-logloss:0.620574
+[INFO] [01/09/2021 11:31:33.169] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [68]	train-logloss:0.619857
+[INFO] [01/09/2021 11:31:34.636] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [69]	train-logloss:0.619489
+[INFO] [01/09/2021 11:31:36.045] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [70]	train-logloss:0.619069
+[INFO] [01/09/2021 11:31:37.356] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [71]	train-logloss:0.618138
+[INFO] [01/09/2021 11:31:38.766] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [72]	train-logloss:0.617842
+[INFO] [01/09/2021 11:31:40.183] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [73]	train-logloss:0.617228
+[INFO] [01/09/2021 11:31:41.514] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [74]	train-logloss:0.616848
+[INFO] [01/09/2021 11:31:42.907] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [75]	train-logloss:0.616601
+[INFO] [01/09/2021 11:31:44.348] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [76]	train-logloss:0.615650
+[INFO] [01/09/2021 11:31:45.771] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [77]	train-logloss:0.615543
+[INFO] [01/09/2021 11:31:47.104] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [78]	train-logloss:0.614750
+[INFO] [01/09/2021 11:31:48.524] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [79]	train-logloss:0.614345
+[INFO] [01/09/2021 11:31:50.069] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [80]	train-logloss:0.613936
+[INFO] [01/09/2021 11:31:51.587] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [81]	train-logloss:0.613223
+[INFO] [01/09/2021 11:31:52.954] [RabitTracker-akka.actor.default-dispatcher-10] [akka://RabitTracker/user/Handler] [82]	train-logloss:0.613072
+[INFO] [01/09/2021 11:31:54.422] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [83]	train-logloss:0.612743
+[INFO] [01/09/2021 11:31:55.857] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [84]	train-logloss:0.611916
+[INFO] [01/09/2021 11:31:57.256] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [85]	train-logloss:0.611486
+[INFO] [01/09/2021 11:31:58.687] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [86]	train-logloss:0.611361
+[INFO] [01/09/2021 11:32:00.019] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [87]	train-logloss:0.610551
+[INFO] [01/09/2021 11:32:01.330] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [88]	train-logloss:0.610507
+[INFO] [01/09/2021 11:32:02.712] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [89]	train-logloss:0.610229
+[INFO] [01/09/2021 11:32:04.197] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [90]	train-logloss:0.609551
+[INFO] [01/09/2021 11:32:05.577] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [91]	train-logloss:0.609116
+[INFO] [01/09/2021 11:32:07.079] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [92]	train-logloss:0.608819
+[INFO] [01/09/2021 11:32:08.516] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [93]	train-logloss:0.608147
+[INFO] [01/09/2021 11:32:09.910] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [94]	train-logloss:0.607972
+[INFO] [01/09/2021 11:32:11.335] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [95]	train-logloss:0.607737
+[INFO] [01/09/2021 11:32:11.336] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/system/IO-TCP/selectors/$a/100] Message [akka.io.SelectionHandler$ChannelReadable$] from Actor[akka://RabitTracker/deadLetters] to Actor[akka://RabitTracker/system/IO-TCP/selectors/$a/100#-470371626] was not delivered. [2] dead letters encountered. This logging can be turned off or adjusted with configuration settings 'akka.log-dead-letters' and 'akka.log-dead-letters-during-shutdown'.
+[INFO] [01/09/2021 11:32:12.724] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [96]	train-logloss:0.606970
+[INFO] [01/09/2021 11:32:14.148] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [97]	train-logloss:0.606730
+[INFO] [01/09/2021 11:32:15.607] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [98]	train-logloss:0.606418
+[INFO] [01/09/2021 11:32:17.120] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [99]	train-logloss:0.605927
+[INFO] [01/09/2021 11:32:18.558] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [100]	train-logloss:0.605533
+[INFO] [01/09/2021 11:32:19.949] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [101]	train-logloss:0.605485
+[INFO] [01/09/2021 11:32:21.503] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [102]	train-logloss:0.605205
+[INFO] [01/09/2021 11:32:22.895] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [103]	train-logloss:0.604565
+[INFO] [01/09/2021 11:32:24.370] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [104]	train-logloss:0.604237
+[INFO] [01/09/2021 11:32:25.857] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [105]	train-logloss:0.604088
+[INFO] [01/09/2021 11:32:27.276] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [106]	train-logloss:0.603792
+[INFO] [01/09/2021 11:32:28.639] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [107]	train-logloss:0.603034
+[INFO] [01/09/2021 11:32:30.022] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [108]	train-logloss:0.602774
+[INFO] [01/09/2021 11:32:31.326] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [109]	train-logloss:0.602811
+[INFO] [01/09/2021 11:32:32.752] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [110]	train-logloss:0.602282
+[INFO] [01/09/2021 11:32:34.364] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [111]	train-logloss:0.601792
+[INFO] [01/09/2021 11:32:35.796] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [112]	train-logloss:0.601548
+[INFO] [01/09/2021 11:32:37.191] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [113]	train-logloss:0.601415
+[INFO] [01/09/2021 11:32:38.559] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [114]	train-logloss:0.601006
+[INFO] [01/09/2021 11:32:39.941] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [115]	train-logloss:0.600620
+[INFO] [01/09/2021 11:32:41.479] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [116]	train-logloss:0.600360
+[INFO] [01/09/2021 11:32:42.839] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [117]	train-logloss:0.600205
+[INFO] [01/09/2021 11:32:44.273] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [118]	train-logloss:0.600097
+[INFO] [01/09/2021 11:32:45.822] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [119]	train-logloss:0.599478
+[INFO] [01/09/2021 11:32:47.239] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [120]	train-logloss:0.599181
+[INFO] [01/09/2021 11:32:48.692] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [121]	train-logloss:0.599065
+[INFO] [01/09/2021 11:32:50.204] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [122]	train-logloss:0.598899
+[INFO] [01/09/2021 11:32:51.643] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [123]	train-logloss:0.598357
+[INFO] [01/09/2021 11:32:53.230] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [124]	train-logloss:0.598047
+[INFO] [01/09/2021 11:32:54.717] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [125]	train-logloss:0.597817
+[INFO] [01/09/2021 11:32:56.143] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [126]	train-logloss:0.597664
+[INFO] [01/09/2021 11:32:57.456] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [127]	train-logloss:0.597562
+[INFO] [01/09/2021 11:32:58.872] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [128]	train-logloss:0.597041
+[INFO] [01/09/2021 11:33:00.497] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [129]	train-logloss:0.596804
+[INFO] [01/09/2021 11:33:01.843] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [130]	train-logloss:0.596537
+[INFO] [01/09/2021 11:33:03.213] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [131]	train-logloss:0.596579
+[INFO] [01/09/2021 11:33:04.726] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [132]	train-logloss:0.596263
+[INFO] [01/09/2021 11:33:06.184] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [133]	train-logloss:0.595694
+[INFO] [01/09/2021 11:33:07.574] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [134]	train-logloss:0.595403
+[INFO] [01/09/2021 11:33:09.024] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [135]	train-logloss:0.595425
+[INFO] [01/09/2021 11:33:10.422] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [136]	train-logloss:0.595393
+[INFO] [01/09/2021 11:33:11.817] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [137]	train-logloss:0.595085
+[INFO] [01/09/2021 11:33:13.161] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [138]	train-logloss:0.594629
+[INFO] [01/09/2021 11:33:14.621] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [139]	train-logloss:0.594360
+[INFO] [01/09/2021 11:33:16.245] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [140]	train-logloss:0.594197
+[INFO] [01/09/2021 11:33:17.833] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [141]	train-logloss:0.594087
+[INFO] [01/09/2021 11:33:19.563] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [142]	train-logloss:0.593890
+[INFO] [01/09/2021 11:33:21.222] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [143]	train-logloss:0.593835
+[INFO] [01/09/2021 11:33:22.588] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [144]	train-logloss:0.593217
+[INFO] [01/09/2021 11:33:24.233] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [145]	train-logloss:0.593049
+[INFO] [01/09/2021 11:33:25.750] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [146]	train-logloss:0.592888
+[INFO] [01/09/2021 11:33:27.198] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [147]	train-logloss:0.592780
+[INFO] [01/09/2021 11:33:28.520] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [148]	train-logloss:0.592708
+[INFO] [01/09/2021 11:33:29.898] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [149]	train-logloss:0.592524
+[INFO] [01/09/2021 11:33:31.379] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [150]	train-logloss:0.592108
+[INFO] [01/09/2021 11:33:32.884] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [151]	train-logloss:0.591874
+[INFO] [01/09/2021 11:33:34.253] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [152]	train-logloss:0.591677
+[INFO] [01/09/2021 11:33:35.811] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [153]	train-logloss:0.591538
+[INFO] [01/09/2021 11:33:37.344] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [154]	train-logloss:0.591496
+[INFO] [01/09/2021 11:33:38.713] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [155]	train-logloss:0.591250
+[INFO] [01/09/2021 11:33:40.134] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [156]	train-logloss:0.590957
+[INFO] [01/09/2021 11:33:41.511] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [157]	train-logloss:0.590689
+[INFO] [01/09/2021 11:33:42.854] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [158]	train-logloss:0.590477
+[INFO] [01/09/2021 11:33:44.239] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [159]	train-logloss:0.590457
+[INFO] [01/09/2021 11:33:45.625] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [160]	train-logloss:0.590298
+[INFO] [01/09/2021 11:33:47.112] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [161]	train-logloss:0.590256
+[INFO] [01/09/2021 11:33:48.520] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [162]	train-logloss:0.590031
+[INFO] [01/09/2021 11:33:49.815] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [163]	train-logloss:0.589632
+[INFO] [01/09/2021 11:33:51.309] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [164]	train-logloss:0.589448
+[INFO] [01/09/2021 11:33:52.656] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [165]	train-logloss:0.589334
+[INFO] [01/09/2021 11:33:54.060] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [166]	train-logloss:0.589196
+[INFO] [01/09/2021 11:33:55.577] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [167]	train-logloss:0.589100
+[INFO] [01/09/2021 11:33:57.036] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [168]	train-logloss:0.588973
+[INFO] [01/09/2021 11:33:58.361] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [169]	train-logloss:0.588867
+[INFO] [01/09/2021 11:33:59.754] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [170]	train-logloss:0.588945
+[INFO] [01/09/2021 11:34:01.144] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [171]	train-logloss:0.588495
+[INFO] [01/09/2021 11:34:02.510] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [172]	train-logloss:0.588318
+[INFO] [01/09/2021 11:34:03.920] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [173]	train-logloss:0.588097
+[INFO] [01/09/2021 11:34:05.390] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [174]	train-logloss:0.587977
+[INFO] [01/09/2021 11:34:06.864] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] [175]	train-logloss:0.587875
+[INFO] [01/09/2021 11:34:08.281] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [176]	train-logloss:0.587905
+[INFO] [01/09/2021 11:34:09.663] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [177]	train-logloss:0.587721
+[INFO] [01/09/2021 11:34:11.002] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [178]	train-logloss:0.587699
+[INFO] [01/09/2021 11:34:12.455] [RabitTracker-akka.actor.default-dispatcher-16] [akka://RabitTracker/user/Handler] [179]	train-logloss:0.587264
+[INFO] [01/09/2021 11:34:13.859] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [180]	train-logloss:0.587096
+[INFO] [01/09/2021 11:34:15.288] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [181]	train-logloss:0.586962
+[INFO] [01/09/2021 11:34:16.650] [RabitTracker-akka.actor.default-dispatcher-10] [akka://RabitTracker/user/Handler] [182]	train-logloss:0.586792
+[INFO] [01/09/2021 11:34:18.088] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [183]	train-logloss:0.586676
+[INFO] [01/09/2021 11:34:19.414] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [184]	train-logloss:0.586594
+[INFO] [01/09/2021 11:34:20.792] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [185]	train-logloss:0.586516
+[INFO] [01/09/2021 11:34:22.182] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [186]	train-logloss:0.586556
+[INFO] [01/09/2021 11:34:23.565] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [187]	train-logloss:0.586351
+[INFO] [01/09/2021 11:34:24.945] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [188]	train-logloss:0.585998
+[INFO] [01/09/2021 11:34:26.318] [RabitTracker-akka.actor.default-dispatcher-4] [akka://RabitTracker/user/Handler] [189]	train-logloss:0.585861
+[INFO] [01/09/2021 11:34:27.916] [RabitTracker-akka.actor.default-dispatcher-12] [akka://RabitTracker/user/Handler] [190]	train-logloss:0.585643
+[INFO] [01/09/2021 11:34:29.344] [RabitTracker-akka.actor.default-dispatcher-13] [akka://RabitTracker/user/Handler] [191]	train-logloss:0.585568
+[INFO] [01/09/2021 11:34:30.685] [RabitTracker-akka.actor.default-dispatcher-6] [akka://RabitTracker/user/Handler] [192]	train-logloss:0.585517
+[INFO] [01/09/2021 11:34:32.073] [RabitTracker-akka.actor.default-dispatcher-9] [akka://RabitTracker/user/Handler] [193]	train-logloss:0.585458
+[INFO] [01/09/2021 11:34:33.539] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [194]	train-logloss:0.585444
+[INFO] [01/09/2021 11:34:34.966] [RabitTracker-akka.actor.default-dispatcher-11] [akka://RabitTracker/user/Handler] [195]	train-logloss:0.585317
+[INFO] [01/09/2021 11:34:36.411] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [196]	train-logloss:0.585236
+[INFO] [01/09/2021 11:34:37.679] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [197]	train-logloss:0.585105
+[INFO] [01/09/2021 11:34:39.164] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] [198]	train-logloss:0.584779
+[INFO] [01/09/2021 11:34:40.555] [RabitTracker-akka.actor.default-dispatcher-7] [akka://RabitTracker/user/Handler] [199]	train-logloss:0.584612
+[INFO] [01/09/2021 11:34:40.559] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] Received shutdown signal from 2
+[INFO] [01/09/2021 11:34:40.559] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] Received shutdown signal from 3
+[INFO] [01/09/2021 11:34:40.559] [RabitTracker-akka.actor.default-dispatcher-2] [akka://RabitTracker/user/Handler] Received shutdown signal from 1
+[INFO] [01/09/2021 11:34:40.571] [RabitTracker-akka.actor.default-dispatcher-8] [akka://RabitTracker/user/Handler] Received shutdown signal from 0
+xgbPipelineModel: org.apache.spark.ml.PipelineModel = pipeline_16d0427f7656
+
+scala> xgbPipelineModel.write.overwrite().save(s"../../external/churn/model/xgb_pipeline")
+
+scala> xgbPipelineModel.stages(1).asInstanceOf[XGBoostClassificationModel].nativeBooster.saveModel("../../external/churn/model/xgb_native.json")
+
+scala> 
+
+scala> val v0 = udf((v: org.apache.spark.ml.linalg.Vector) => v.toArray(0))
+v0: org.apache.spark.sql.expressions.UserDefinedFunction = UserDefinedFunction(<function1>,DoubleType,Some(List(org.apache.spark.ml.linalg.VectorUDT@3bfc3ba7)))
+
+scala> val v1 = udf((v: org.apache.spark.ml.linalg.Vector) => v.toArray(1))
+v1: org.apache.spark.sql.expressions.UserDefinedFunction = UserDefinedFunction(<function1>,DoubleType,Some(List(org.apache.spark.ml.linalg.VectorUDT@3bfc3ba7)))
+
+scala> 
+
+scala> (
+     |     xgbPipelineModel
+     |     .transform(Train)
+     |     .withColumn("score", v1($"probability"))
+     |     .select("current_date","useID1",Target, "score")
+     |     .coalesce(1)
+     |     .write
+     |     .mode("overwrite")
+     |     .option("header", "true")
+     |     .option("delimiter","\t")
+     |     .csv("../../external/churn/data/score_train")
+     | 
+     | )
+
+scala> (
+     |     xgbPipelineModel
+     |     .transform(Valid)
+     |     .withColumn("score", v1($"probability"))
+     |     .select("current_date","useID1",Target, "score")
+     |     .coalesce(1)
+     |     .write
+     |     .mode("overwrite")
+     |     .option("header", "true")
+     |     .option("delimiter","\t")
+     |     .csv("../../external/churn/data/score_valid")
+     | )
+
+scala> 
+
+scala> def printMetric(spark: org.apache.spark.sql.SparkSession, data: DataFrame, label: String) = {
+     |     val evaluator = new BinaryClassificationEvaluator().setLabelCol(label).setRawPredictionCol("probability").setMetricName("areaUnderROC")
+     |     val result = xgbPipelineModel.transform(data).withColumn("score", v1($"probability"))
+     |     val rocauc = evaluator.evaluate(result)
+     |     println("ROCAUC: " + rocauc.toString)
+     |     val query =s"""
+     |       |SELECT --*
+     |       | avg(${label}) as target_avg,
+     |       | avg(CASE WHEN t.nn <= t.cnt*0.01 THEN t.${label} ELSE Null END) as q001,
+     |       | avg(CASE WHEN t.nn <= t.cnt*0.05 THEN t.${label} ELSE Null END) as q005,
+     |       | avg(CASE WHEN t.nn <= t.cnt*0.10 THEN t.${label} ELSE Null END) as q010,
+     |       | avg(CASE WHEN t.nn <= t.cnt*0.15 THEN t.${label} ELSE Null END) as q015
+     |       |FROM
+     |       |   (SELECT ${label}, score, row_number() over(order by score desc) as nn, count(*) over() as cnt FROM RESULT order by score DESC) t
+     |       |""".stripMargin
+     |     result.select(label, "score").createOrReplaceTempView("RESULT")
+     |     spark.sql(query).show()
+     | }
+printMetric: (spark: org.apache.spark.sql.SparkSession, data: org.apache.spark.sql.DataFrame, label: String)Unit
+
+scala> 
+
+scala> // METRIC ON TRAIN
+
+scala> printMetric(spark, Train, Target)
+ROCAUC: 0.7551724778355985
++--------------------+-------------------+-------------------+-------------------+-------------------+
+|          target_avg|               q001|               q005|               q010|               q015|
++--------------------+-------------------+-------------------+-------------------+-------------------+
+|0.046167857182044615|0.13036321738176232|0.12447331460674158|0.11550742289081273|0.11006912695219634|
++--------------------+-------------------+-------------------+-------------------+-------------------+
+
+
+scala> // METRIC ON VALID
+
+scala> printMetric(spark, Valid, Target)
+ROCAUC: 0.745034539072485
++-------------------+-------------------+-------------------+------------------+------------------+
+|         target_avg|               q001|               q005|              q010|              q015|
++-------------------+-------------------+-------------------+------------------+------------------+
+|0.05013967321150292|0.13801560758082498|0.12797074954296161|0.1197886476122531|0.1143545078921554|
++-------------------+-------------------+-------------------+------------------+------------------+
+
+
+scala> 
+
+scala> spark.catalog.clearCache()
+
+scala> spark.close()
+
+scala> spark.stop():quit

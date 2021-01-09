@@ -1,0 +1,312 @@
+version: '3' 
+services:
+  
+  # ALMOND
+  almond:
+    image: almondsh/almond:latest
+    container_name: almond
+    ports:
+      - 5001:8888
+      #- 4040-4050:4040-4050
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.1
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./external:/home/jovyan/external
+   
+  # AIRFLOW
+  postgres:
+    image: postgres:9.6
+    container_name: airflow-db
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    ports:
+      - 5433:5432
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.2
+  
+  webserver:
+    image: puckel/docker-airflow:1.10.1
+    container_name: airflow-webserver
+    build:
+      context: https://github.com/puckel/docker-airflow.git#1.10.1
+      dockerfile: Dockerfile
+      args:
+        AIRFLOW_DEPS: gcp_api,s3
+        PYTHON_DEPS: sqlalchemy==1.2.0
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      - LOAD_EX=n
+      - EXECUTOR=Local
+      - FERNET_KEY=jsDPRErfv8Z_eVTnGfF8ywd19j4pyqE3NpdUBA_oRTo=
+    volumes:
+      - ./airflow/dags:/usr/local/airflow/dags
+      - ./external:/external
+      # Uncomment to include custom plugins
+      # - ./plugins:/usr/local/airflow/plugins
+    ports:
+      - 5002:8080
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.3
+    command: webserver
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+ 
+  # GRAFANA
+  grafana:
+    image: grafana/grafana:7.3.6
+    container_name: grafana
+    ports:
+      - 3000:3000
+    volumes:
+      ## - ./grafana-data:/var/lib/grafana
+      - ./external:/external
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.20    
+  
+  # HADOOP
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop2.7.4-java8
+    container_name: hadoop-namenode
+    volumes:
+      - ./hdfs/namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=test
+    env_file:
+      - ./hadoop-hive.env
+    ports:
+      - 50070:50070
+      #- 9870:9870
+      #- 9000:9000
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.5
+  
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop2.7.4-java8
+    container_name: hadoop-datanode
+    volumes:
+      - ./hdfs/datanode:/hadoop/dfs/data
+      - ./external:/external
+    env_file:
+      - ./hadoop-hive.env
+    environment:
+      SERVICE_PRECONDITION: "namenode:50070"
+    depends_on:
+      - namenode
+    ports:
+      - 50075:50075
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.6
+  
+  # HIVE
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    env_file:
+      - ./hadoop-hive.env
+    environment:
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://hive-metastore/metastore"
+      SERVICE_PRECONDITION: "hive-metastore:9083"
+    ports:
+      - 10000:10000
+    depends_on:
+      - hive-metastore
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.7
+  
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    env_file:
+      - ./hadoop-hive.env
+    command: /opt/hive/bin/hive --service metastore
+    environment:
+      SERVICE_PRECONDITION: "namenode:50070 datanode:50075 hive-metastore-postgresql:5432"
+    ports:
+      - 9083:9083
+    depends_on:
+      - hive-metastore-postgresql
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.8
+  
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+    depends_on:
+      - datanode
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.9
+  
+  # SPARK
+  spark-master:
+    image: bde2020/spark-master:2.4.5-hadoop2.7
+    container_name: spark-master
+    ports:
+      - 8080:8080
+      - 7077:7077
+      - 4040:4040
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    env_file:
+      - ./hadoop-hive.env
+    volumes:
+      - ./external:/external
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.10
+     
+  spark-worker:
+    image: bde2020/spark-worker:2.4.5-hadoop2.7
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore/metastore
+    depends_on:
+      - spark-master
+    ports:
+      - 8081:8081
+    env_file:
+      - ./hadoop-hive.env
+    volumes:
+      - ./external:/external
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.11
+  
+  # HUE
+  hue:
+      image: gethue/hue:20191107-135001
+      hostname: hue
+      container_name: hue
+      dns: 8.8.8.8
+      ports:
+      - 8888:8888
+      volumes:
+        - ./hue-overrides.ini:/usr/share/hue/desktop/conf/z-hue.ini
+      depends_on:
+      - "database"
+      networks:
+        net_pet:
+          ipv4_address: 172.27.1.13
+  
+  database:
+      image: mysql:5.7
+      container_name: hue-database
+      ports:
+          - 33062:3306
+      command: --init-file /data/application/init.sql
+      volumes:
+          - ./mysql/data:/var/lib/mysql
+          - ./init.sql:/data/application/init.sql
+      environment:
+          MYSQL_ROOT_USER: root
+          MYSQL_ROOT_PASSWORD: secret
+          MYSQL_DATABASE: hue
+          MYSQL_USER: root
+          MYSQL_PASSWORD: secret
+      networks:
+        net_pet:
+          ipv4_address: 172.27.1.14
+
+  # KAFKA-ZOOKEEPER
+  zookeeper:
+    image: zookeeper:latest
+    container_name: kafka-zookeeper
+    ports:
+      - 2181:2181
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.15
+
+  kafka:
+    image: wurstmeister/kafka:2.12-2.4.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - 9092:9092
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: 172.27.1.16
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.16
+ 
+  kafka_manager:
+    image: hlebalbau/kafka-manager:stable
+    container_name: kafka-manager
+    ports:
+      - "9001:9000"
+    environment:
+        ZK_HOSTS: "zookeeper:2181"
+        APPLICATION_SECRET: "random-secret"
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.17
+
+  # MLFLOW
+  mlflow-db:
+    image: postgres:12.2
+    container_name: mlflow-db
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.18
+    environment:
+      POSTGRES_USER: "mlflow"
+      POSTGRES_PASSWORD: "mlflow"
+      POSTGRES_DB: "mlflow"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    volumes:
+      - ./mlflow-storage/postgres/ps_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mlflow-webserver:
+    environment:
+      PORT: 1234
+      BACKEND_STORE: postgresql+psycopg2://mlflow:mlflow@mlflow-db:5432/mlflow
+      ARTIFACT_ROOT: /mlflow-storage
+    image: mlrepa/mlflow-server:dev
+    container_name: mlflow-webserver
+    networks:
+      net_pet:
+        ipv4_address: 172.27.1.19
+    expose:
+      - 1234
+    ports:
+      - 1234:1234
+    volumes:
+      - ./mlflow-storage:/mlflow-storage
+    depends_on:
+      - mlflow-db
+    restart: always
+  
+# NETWORK
+networks:
+  net_pet:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.27.0.0/16
